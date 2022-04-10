@@ -1,0 +1,154 @@
+---
+title: "lab06_MillerGordon"
+author: "Gordon Miller"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+    css: lab_templet.css
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(dplyr)
+library(tidyverse)
+library(reshape2)
+library(caret)
+library(rsample)    
+library(MASS)
+select<-dplyr::select
+```
+
+# Read In Data
+```{r}
+data_url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/wine/wine.data"
+
+names_url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/wine/wine.names"
+
+#Use read_table() for whitespace delimited input(lot of space between values in data)
+wine_names <- read_table(names_url, col_names = FALSE)
+
+#Select only column names from wine_names data
+wine_names2 <- wine_names %>% 
+  slice(47:59) %>% 
+  select(X1, X2) %>% 
+  mutate(X1 = str_sub(X1,4)) %>% 
+  mutate(var_names = ifelse(X1 == "", X2, X1))
+
+#adjust color intensity column name
+wine_names2$var_names[10] <- paste(wine_names2$X1[10],"",wine_names2$X2[10])
+
+wine_data <- read_csv(data_url, col_names = c("Class", wine_names2$var_names))
+
+wine_data <- wine_data %>% 
+  mutate(Class = as.factor(Class))
+```
+
+# Data Exploration
+```{r}
+wine_data %>% 
+  summarise_all(funs(sum(is.na(.)))) %>% 
+  gather() %>% 
+  mutate(percent =round(value/nrow(wine_data)*100,2))
+```
+There are no missing values in wine_data.
+
+## Summary Statistics and distributions
+```{r}
+wine_data %>% 
+  select_if(
+    function(col) is.numeric(col)) %>% 
+  summary()
+
+#Convert to melted format
+melt_df<-melt(wine_data[-1])
+
+# Box plot of all variables except response variable
+ggplot(melt_df, aes(x=variable, y=value)) + 
+  geom_boxplot()+
+  facet_wrap(~variable, scale="free")
+```
+It appears that the following features are skewed right: Proline, Color Intensity, Proanthocyanins, Nonflavanoid, Magnesium, Malic. Hue,  OD280/OD315, Flavanoids, and Total features are skewed left. The box plots for each feature in our data displays the skewness of each variable as well as any outliers. One of the assumptions of Linear and Quadratic Discriminant Analysis is that all the features are normally distributed, however, at this time we are going to attempt to predict the class of the response variable without making transformations to the features. 
+
+# Linear Discriminant Analysis (LDA)
+
+## Split Data
+```{r}
+set.seed(1234)
+
+inTrain <- wine_data$Class %>%
+  createDataPartition(p = 0.70, 
+                      list = FALSE)
+train <- wine_data[inTrain, ]
+test <- wine_data[-inTrain, ]
+```
+
+## Fitting LDA
+```{r}
+set.seed(1234)
+
+tr.control <-trainControl(method = 'repeatedcv',
+                          number = 10,
+                          repeats = 5)
+lda_fit <- train(
+  Class ~ .,
+  data = train,
+  method = "lda",
+  trControl = tr.control
+)
+
+lda_model <- lda_fit$finalModel
+lda_model
+```
+Our model uses two discriminants to set boundaries for classification based on what creates the greatest separation between our features means for each class. Our model uses two discriminants because our reponse variable (Class) has 3 different classes so we need to have 2 separators in our data. 
+
+The first discriminant function seperates 69.62% of the three classes and the second function makes improvements to this seperation.
+
+# Visualize LDA predictions - histograms
+```{r}
+lda_pred <- predict(lda_model, 
+                    train[-1])
+ldahist(data = lda_pred$x[,1], 
+        g=train$Class)
+
+ldahist(data = lda_pred$x[,2], 
+        g=train$Class)
+```
+As shown in the first histogram our first discriminant function does a great job of distinguishing between all three of the classes in our data. We can come to this conclusion since there is little overlap between the three distributions. The second discrimnant function doesn't do a great job at distinguishing between class 1 and 3 but rather focuses on distinguishing class 2 from 1 and 3. 
+
+## Confusion Matrix
+```{r}
+lda_pred <- predict(lda_model, test[-1])
+pred_class <- as.factor(lda_pred$class)
+confusionMatrix(pred_class, as.factor(test$Class))
+```
+Our model has performed very well with a misclassification rate of 3.85%. There also is no concerns with sensitivity or specificity as these rates stay above 90% for all three classes. 
+
+# Quadratic Discriminant Analysis (QDA)
+## fit QDA model
+```{r}
+qda_fit <- train(
+  Class ~ .,
+  data = train,
+  method = "qda",
+  trControl = tr.control
+)
+qda_fit
+qda_model <- qda_fit$finalModel
+```
+Accruacy of the model on training data is extremely high, nearly 100% (be wary of overfitting).
+
+
+## QDA predictions
+```{r}
+qda_pred <- predict(qda_model, 
+                    test[-1])
+
+q_pred_class <- as.factor(qda_pred$class)
+
+confusionMatrix(q_pred_class,
+                as.factor(test$Class))
+```
+Our QDA model is extremely similar to our LDA model apart from mistaking 2 class 3 observations as being in the 2nd class, causing the sensitivity for class 3 to be significantly lower.
